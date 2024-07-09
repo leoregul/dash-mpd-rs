@@ -1917,7 +1917,14 @@ pub struct MPD {
 
 impl std::fmt::Display for MPD {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", quick_xml::se::to_string(self).map_err(|_| std::fmt::Error)?)
+        let mut buffer = String::new();
+        let mut ser = quick_xml::se::Serializer::new(&mut buffer);
+        ser.indent(' ', 2);
+        if let Err(err) = self.serialize(ser).map_err(|_| std::fmt::Error) {
+            write!(f, "{err}")
+        } else {
+            writeln!(f, "{buffer}")
+        }
     }
 }
 
