@@ -28,13 +28,13 @@ fn test_mpd_parser () {
     let res = parse(case1);
     let mpd = res.unwrap();
     assert_eq!(mpd.periods.len(), 1);
-    assert!(mpd.ProgramInformation.is_none());
+    assert_eq!(mpd.ProgramInformation.len(), 0);
 
     let case2 = r#"<?xml version="1.0" encoding="UTF-8"?><MPD foo="foo"><Period></Period><foo></foo></MPD>"#;
     let res = parse(case2);
     let mpd = res.unwrap();
     assert_eq!(mpd.periods.len(), 1);
-    assert!(mpd.ProgramInformation.is_none());
+    assert_eq!(mpd.ProgramInformation.len(), 0);
 
     let case3 = r#"<?xml version="1.0" encoding="UTF-8"?><MPD><Period></PeriodZ></MPD>"#;
     let res = parse(case3);
@@ -142,22 +142,22 @@ fn test_unknown_elements () {
      </ProgramInformation></MPD>"#;
     let res = parse(case3);
     let mpd = res.unwrap();
-    assert!(mpd.ProgramInformation.is_some());
-    let pi = mpd.ProgramInformation.unwrap();
-    assert!(pi.Title.is_some());
-    let title = pi.Title.unwrap();
-    assert_eq!(title.content.unwrap(), "Foobles");
+    assert!(mpd.ProgramInformation.len() > 0);
+    let pi = &mpd.ProgramInformation.first().unwrap();
+    assert!(&pi.Title.is_some());
+    let title = pi.Title.as_ref().unwrap();
+    assert_eq!(title.content.clone().unwrap().clone(), "Foobles");
 
     let case4 = r#"<MPD><ProgramInformation>
        <Title>Foobles<upfx:UnknownElement/></Title>
      </ProgramInformation></MPD>"#;
     let res = parse(case4);
     let mpd = res.unwrap();
-    assert!(mpd.ProgramInformation.is_some());
-    let pi = mpd.ProgramInformation.unwrap();
+    assert!(mpd.ProgramInformation.len() > 0);
+    let pi = &mpd.ProgramInformation.first().unwrap();
     assert!(pi.Title.is_some());
-    let title = pi.Title.unwrap();
-    assert_eq!(title.content.unwrap(), "Foobles");
+    let title = pi.Title.as_ref().unwrap();
+    assert_eq!(title.content.clone().unwrap(), "Foobles");
 }
 
 #[test]
@@ -337,13 +337,13 @@ fn test_parse_low_latency() {
     let res = parse(&xml);
     let mpd = res.unwrap();
     assert_eq!(mpd.mpdtype, Some(String::from("dynamic")));
-    assert!(mpd.ServiceDescription.as_ref().is_some_and(
-        |sd| sd.Latency.as_ref().is_some_and(
+    assert!(mpd.ServiceDescription.first().as_ref().is_some_and(
+        |sd| sd.Latency.iter().all(
             |l| l.max.is_some_and(
                 |m| 6999.9 < m && m < 7000.1))));
-    assert!(mpd.ServiceDescription.as_ref().is_some_and(
-        |sd| sd.PlaybackRate.as_ref().is_some_and(
-            |pbr| 0.95 < pbr.min && pbr.min < 0.97)));
+    assert!(mpd.ServiceDescription.first().as_ref().is_some_and(
+        |sd| sd.PlaybackRate.iter().all(
+            |pbr| 0.95 < pbr.min.unwrap() && pbr.min.unwrap() < 0.97)));
     assert!(mpd.UTCTiming.iter().all(
         |utc| utc.value.as_ref().is_some_and(
             |v| v.contains("time.akamai.com"))));
@@ -573,6 +573,29 @@ async fn test_parsing_online() {
     check_mpd(client.clone(),
               "https://github.com/Eyevinn/dash-mpd/raw/226078de966af6b72b9da6b3f7fd2b2d8c2a1c79/mpd/testdata/schema-mpds/example_H2.mpd").await;
 
+    // Additional test files from https://github.com/claudiuolteanu/mpd-parser
+    check_mpd(client.clone(),
+              "https://github.com/claudiuolteanu/mpd-parser/raw/refs/heads/master/examples/car-20120827-manifest.mpd").await;
+    check_mpd(client.clone(),
+              "https://github.com/claudiuolteanu/mpd-parser/raw/refs/heads/master/examples/feelings_vp9-20130806-manifest.mpd").await;
+
+    check_mpd(client.clone(),
+              "https://github.com/claudiuolteanu/mpd-parser/raw/refs/heads/master/examples/oops-20120802-manifest.mpd").await;
+
+    check_mpd(client.clone(),
+              "https://content.media24.link/drm/manifest.mpd").await;
+
+    check_mpd(client.clone(),
+              "http://vod-dash-ww-rd-stage.akamaized.net/dash/ondemand/testcard/1/client_manifest-nosurround-ctv-events_on_both.mpd").await;
+
+    check_mpd(client.clone(),
+              "https://vod-dash-ww-rd-stage.akamaized.net/testcard/2/manifests/avc-full-events_both-en-rel.mpd").await;
+
+    check_mpd(client.clone(),
+              "http://vod-dash-ww-rd-stage.akamaized.net/dash/ondemand/testcard/1/client_manifest-pto_both-events.mpd").await;
+
+    check_mpd(client.clone(),
+              "http://vs-dash-ww-rd-live.akamaized.net/wct/A00/client_manifest.mpd").await;
 }
 
 
@@ -609,9 +632,6 @@ async fn test_parsing_subrepresentations() {
 #[tokio::test]
 async fn test_parsing_eventstream() {
     setup_logging();
-    if env::var("CI").is_ok() {
-        return;
-    }
     let client = reqwest::Client::builder()
         .timeout(Duration::new(30, 0))
         .gzip(true)
@@ -640,9 +660,6 @@ async fn test_parsing_eventstream() {
 #[tokio::test]
 async fn test_parsing_supplementalproperty() {
     setup_logging();
-    if env::var("CI").is_ok() {
-        return;
-    }
     let client = reqwest::Client::builder()
         .timeout(Duration::new(30, 0))
         .gzip(true)
@@ -665,6 +682,87 @@ async fn test_parsing_supplementalproperty() {
         |p| p.adaptations.iter().all(
             |a| a.supplemental_property.iter().all(
                 |sp| sp.value.as_ref().is_some_and(|v| !v.eq("42"))))));
+}
+
+
+#[tokio::test]
+async fn test_parsing_essentialproperty() {
+    setup_logging();
+    if env::var("CI").is_ok() {
+        return;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::new(30, 0))
+        .gzip(true)
+        .build()
+        .expect("creating HTTP client");
+    let url = "http://dash.edgesuite.net/dash264/TestCasesNegative/1/1.mpd";
+    let xml = client.get(url)
+        .header("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
+        .send().await
+        .expect("requesting MPD content")
+        .text().await
+        .expect("fetching MPD content");
+    let mpd = dash_mpd::parse(&xml);
+    let mpd = mpd.unwrap();
+    assert!(mpd.periods.iter().any(
+        |p| p.adaptations.iter().any(
+            |r| r.representations.iter().any(
+                |a| a.essential_property.iter().any(
+                    |ep| ep.value.as_ref().is_some_and(|v| v.eq("Negative Test EssentialProperty 1")))))));
+}
+
+
+// From a list of streams at
+//   https://garfnet.org.uk/cms/tables/radio-frequencies/internet-radio-player/bbc-national-and-local-radio-dash-streams/
+//
+// For dynamic MPDs, you shall "never" start to play with startNumber, but the latest available
+// segment is LSN = floor( (now - (availabilityStartTime+PST))/segmentDuration + startNumber - 1).
+#[tokio::test]
+async fn test_parsing_servicelocation() {
+    setup_logging();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::new(30, 0))
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.10 Safari/605.1.1")
+        .gzip(true)
+        .build()
+        .expect("creating HTTP client");
+    let url = "https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks/bbc_world_service.mpd";
+    let xml = client.get(url)
+        .header("Accept", "application/dash+xml,video/vnd.mpeg.dash.mpd")
+        .send().await
+        .expect("requesting MPD content")
+        .text().await
+        .expect("fetching MPD content");
+    let mpd = dash_mpd::parse(&xml);
+    let mpd = mpd.unwrap();
+    assert!(mpd.publishTime.is_some());
+    assert!(mpd.UTCTiming.len() > 0);
+    assert_eq!(mpd.base_url.len(), 1);
+    let base_url = mpd.base_url.first().unwrap();
+    assert!(base_url.priority.is_some());
+    assert!(base_url.weight.is_some());
+    assert!(base_url.serviceLocation.is_some());
+}
+
+
+// The aim of this test is to check that the ordering of elements in the XML serialization of
+// ServiceDescription elements respects the order specified by the DASH XSD.
+#[tokio::test]
+async fn test_parsing_servicedescription() {
+    setup_logging();
+    let fragment = r#"
+<ServiceDescription id="0">
+  <Scope schemeIdUri="urn:dvb:dash:lowlatency:scope:2019"/>
+  <Latency min="3000" max="5000" target="4000"/>
+  <PlaybackRate min="0.95" max="1.05"/>
+</ServiceDescription>"#;
+    let sd: dash_mpd::ServiceDescription = quick_xml::de::from_str(&fragment).unwrap();
+    let serialized = quick_xml::se::to_string(&sd).unwrap();
+    let pos1 = serialized.find("Scope").unwrap();
+    let pos2 = serialized.find("Latency").unwrap();
+    let pos3 = serialized.find("PlaybackRate").unwrap();
+    assert!(pos1 < pos2 && pos2 < pos3);
 }
 
 
@@ -701,7 +799,7 @@ async fn test_parsing_namespacing() {
 // specification states that this should be an SAPType, an integer (checked with
 // https://conformance.dashif.org/).
 #[tokio::test]
-#[should_panic(expected = "invalid digit found in string")]
+#[should_panic(expected = "Parsing")]
 async fn test_parsing_fail_invalid_int() {
     setup_logging();
     DashDownloader::new("https://dash.akamaized.net/akamai/test/jurassic-compact.mpd")

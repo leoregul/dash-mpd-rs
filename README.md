@@ -8,9 +8,9 @@ media content from a streaming server.
 
 [![Crates.io](https://img.shields.io/crates/v/dash-mpd)](https://crates.io/crates/dash-mpd)
 [![Released API docs](https://docs.rs/dash-mpd/badge.svg)](https://docs.rs/dash-mpd/)
-[![CI](https://github.com/emarsden/dash-mpd-rs/workflows/build/badge.svg)](https://github.com/emarsden/dash-mpd-rs/workflows/build/badge.svg)
+[![CI](https://github.com/emarsden/dash-mpd-rs/workflows/build/badge.svg)](https://github.com/emarsden/dash-mpd-rs/actions/workflows/ci.yml)
 [![Dependency status](https://deps.rs/repo/github/emarsden/dash-mpd-rs/status.svg)](https://deps.rs/repo/github/emarsden/dash-mpd-rs)
-[![Recent crates.io downloads](https://img.shields.io/crates/dr/dash-mpd?label=crates.io%20recent%20downloads)](https://img.shields.io/crates/dr/dash-mpd?label=crates.io%20recent%20downloads)
+[![Recent crates.io downloads](https://img.shields.io/crates/dr/dash-mpd?label=crates.io%20recent%20downloads)](https://crates.io/crates/dash-mpd)
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 
 [DASH](https://en.wikipedia.org/wiki/Dynamic_Adaptive_Streaming_over_HTTP) (dynamic adaptive
@@ -24,7 +24,8 @@ with file segments using either MPEG-2 Transport Stream (M2TS) container format 
 [howvideo.works](https://howvideo.works/#dash).
 
 This library provides a serde-based parser (deserializer) and serializer for the DASH MPD format, as
-formally defined in ISO/IEC standard 23009-1:2019. XML schema files are [available for no cost from
+formally defined in ISO/IEC standard 23009-1:2022 (this is the fifth edition). XML schema files are
+[available for no cost from
 ISO](https://standards.iso.org/ittf/PubliclyAvailableStandards/MPEG-DASH_schema_files/). The library
 also provides non-exhaustive support for certain DASH extensions such as the DVB-DASH and HbbTV
 (Hybrid Broadcast Broadband TV) profiles. When MPD files in practical use diverge from the formal
@@ -74,7 +75,7 @@ default configuration (using an external application as a subprocess).
   be saved to a file with the same base name as the requested output file, but with an extension
   corresponding to the subtitle type (e.g. `.srt`, `.vtt`). Subtitles distributed in WebVTT/wvtt
   format (either as a single media stream or a fragmented MP4 stream) will be converted to the more
-  standard SRT format using the MP4Box commandline utility (from the [GPAC](https://gpac.wp.imt.fr/)
+  standard SRT format using the MP4Box commandline utility (from the [GPAC](https://gpac.io/)
   project), if it is installed. STPP subtitles (which according to the DASH specifications should be
   formatted as EBU-TT) will be muxed into the output media container as a `subt:stpp` stream using
   MP4Box (VLC should be able to read these subtitles), and also converted to a separate `.ttml` file
@@ -86,8 +87,9 @@ default configuration (using an external application as a subprocess).
   suite](https://github.com/axiomatic-systems/Bento4/) to be installed ([binaries are
   available](https://www.bento4.com/downloads/) for common platforms), or the [Shaka
   packager](https://github.com/shaka-project/shaka-packager) application (binaries for common
-  platforms are available as GitHub releases). See the `add_decryption_key` function on
-  `DashDownloader`, the `with_decryptor_preference` function on `DashDownloader`, and the
+  platforms are available as GitHub releases), or the MP4Box commandline application to be
+  installed. See the `add_decryption_key` function on `DashDownloader`, the
+  `with_decryptor_preference` function on `DashDownloader`, and the
   [decrypt.rs](https://github.com/emarsden/dash-mpd-rs/blob/main/examples/decrypt.rs) example.
 
 - XLink elements (only with actuate=onLoad semantics), including resolve-to-zero.
@@ -126,7 +128,7 @@ default configuration (using an external application as a subprocess).
 ## Priority of different stream preference options
 
 The library allows you to express a preference ordering for several characteristics of streams in a
-DASH manifest (audio language, video resolution, bandwidth/quality, role label). The list belows
+DASH manifest (audio language, video resolution, bandwidth/quality, role label). The list below
 specifies the order in which these preferences are handled:
 
 - First filter out AdaptationSets in the manifest that do not correspond to our language
@@ -177,7 +179,7 @@ fn main() {
         .expect("fetching MPD content");
     let mpd: MPD = parse(&xml)
         .expect("parsing MPD");
-    if let Some(pi) = mpd.ProgramInformation {
+    for pi in &mpd.ProgramInformation {
         if let Some(title) = pi.Title {
             println!("Title: {:?}", title.content);
         }
@@ -213,7 +215,7 @@ fn main() {
    let mpd = MPD {
        mpdtype: Some("static".into()),
        xmlns: Some("urn:mpeg:dash:schema:mpd:2011".into()),
-       ProgramInformation: Some(pi),
+       ProgramInformation: vec!(pi),
        ..Default::default()
    };
 
@@ -254,14 +256,14 @@ Add to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-dash-mpd = "0.17.2"
+dash-mpd = "0.18.4"
 ```
 
 If you don’t need the download functionality and wish to reduce code size, use:
 
 ```toml
 [dependencies]
-dash-mpd = { version = "0.17.2", default-features = false }
+dash-mpd = { version = "0.18.4", default-features = false }
 ```
 
 We endeavour to use **semantic versioning** for this crate despite its 0.x version number: a major
@@ -279,6 +281,10 @@ be enabled:
 - `fetch` *(enabled by default)*: enables support for downloading stream content. This accounts for
   most of the code size of the library, so disable it if you only need the struct definitions for
   serializing and deserializing MPDs.
+
+- `http2` *(enabled by default)*: enables the `http2` feature on our `reqwest` dependency, which
+  means that HTTP requests will try to establish HTTP/2 (instead of HTTP/1.1) connections if the
+  functionality is advertised by an HTTP server, using the `Upgrade` header.
 
 - `socks` *(enabled by default)*: enables the `socks` feature on our `reqwest` dependency, which
   provides SOCKS5 proxy support for HTTP/HTTPS requests.

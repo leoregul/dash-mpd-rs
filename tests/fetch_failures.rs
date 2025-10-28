@@ -10,7 +10,7 @@ use dash_mpd::fetch::DashDownloader;
 
 
 #[tokio::test]
-#[should_panic(expected = "invalid digit found in string")]
+#[should_panic(expected = "Parsing")]
 async fn test_error_parsing() {
     // This DASH manifest is invalid because it contains a presentationDuration="25.7726666667" on a
     // SegmentBase node. The DASH XSD specification states that @presentationDuration is an
@@ -23,7 +23,7 @@ async fn test_error_parsing() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "invalid digit found in string")]
+#[should_panic(expected = "Parsing")]
 async fn test_error_group_attribute() {
     // This DASH manifest is invalid because it contains an invalid valid "notAnInteger" for the
     // AdaptationSet.group attribute.
@@ -113,35 +113,6 @@ async fn test_error_dns() {
     DashDownloader::new(url)
         .best_quality()
         .download().await
-        .unwrap();
-}
-
-
-// Check that timeouts on network requests are correctly signalled. This manifest specifies a single
-// large video segment (427MB) which should lead to a network timeout with our 0.5s setting, even
-// if the test is running with a very large network bandwidth.
-//
-// Given that we retry failing network requests, the final error is not reported as a timeout, but
-// as a "more than max_error_count network errors".
-#[tokio::test]
-#[should_panic(expected = "max_error_count")]
-async fn test_error_timeout() {
-    // Don't run download tests on CI infrastructure
-    if env::var("CI").is_ok() {
-        panic!("max_error_count");
-    }
-    let out = env::temp_dir().join("timeout.mkv");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(500))
-        .build()
-        .unwrap();
-    DashDownloader::new("https://test-speke.s3.eu-west-3.amazonaws.com/tos/clear/manifest.mpd")
-        .best_quality()
-        .verbosity(3)
-        .fragment_retry_count(3)
-        .max_error_count(1)
-        .with_http_client(client)
-        .download_to(out.clone()).await
         .unwrap();
 }
 

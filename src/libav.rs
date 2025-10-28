@@ -1,21 +1,21 @@
-/// libav.rs
-///
-/// Muxing support, using libav (ffmpeg as a shared library) via the ac_ffmpeg crate. This support
-/// is only compiled in if the "libav" feature is enabled, which is not the default (default is to
-/// use ffmpeg as a commandline application, see file "ffmpeg.rs").
-///
-/// This use of libav via the library API is a little fiddly, because the ffmpeg commandline
-/// application implements a number of checks and workarounds to fix invalid input streams that you
-/// tend to encounter in the wild. We have implemented some of these workarounds here, but not all
-/// those implemented in the ffmpeg commandline application.
-///
-/// Our code is adapted from the muxing example in the ac_ffmpeg crate
-///
-///    https://github.com/angelcam/rust-ac-ffmpeg/blob/master/examples/muxing.rs
-///
-/// and muxing examples in ffmpeg/libav in C
-///
-///    https://github.com/FFmpeg/FFmpeg/blob/master/doc/examples/muxing.c
+// libav.rs
+//
+// Muxing support, using libav (ffmpeg as a shared library) via the ac_ffmpeg crate. This support
+// is only compiled in if the "libav" feature is enabled, which is not the default (default is to
+// use ffmpeg as a commandline application, see file "ffmpeg.rs").
+//
+// This use of libav via the library API is a little fiddly, because the ffmpeg commandline
+// application implements a number of checks and workarounds to fix invalid input streams that you
+// tend to encounter in the wild. We have implemented some of these workarounds here, but not all
+// those implemented in the ffmpeg commandline application.
+//
+// Our code is adapted from the muxing example in the ac_ffmpeg crate
+//
+//    https://github.com/angelcam/rust-ac-ffmpeg/blob/master/examples/muxing.rs
+//
+// and muxing examples in ffmpeg/libav in C
+//
+//    https://github.com/FFmpeg/FFmpeg/blob/master/doc/examples/muxing.c
 
 
 use std::io;
@@ -24,7 +24,7 @@ use fs_err as fs;
 use fs::File;
 use std::path::Path;
 use std::io::{BufReader, BufWriter};
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 use ac_ffmpeg::codec::CodecParameters;
 use ac_ffmpeg::packet::Packet;
 use ac_ffmpeg::time::Timestamp;
@@ -35,7 +35,7 @@ use ac_ffmpeg::format::muxer::Muxer;
 use ac_ffmpeg::format::muxer::OutputFormat;
 use crate::DashMpdError;
 use crate::fetch::DashDownloader;
-use crate::media::{audio_container_type, video_container_type};
+use crate::media::{audio_container_type, video_container_type, AudioTrack};
 
 
 
@@ -80,10 +80,14 @@ fn has_invalid_timestamps(p: &Packet, last_dts: Timestamp) -> bool {
 pub fn mux_audio_video(
     _downloader: &DashDownloader,
     output_path: &Path,
-    audio_path: &Path,
+    audio_tracks: &Vec<AudioTrack>,
     video_path: &Path) -> Result<(), DashMpdError> {
     ac_ffmpeg::set_log_callback(|_count, msg: &str| info!("ffmpeg: {msg}"));
-    let audio_str = audio_path
+    if audio_tracks.len() > 1 {
+        error!("Cannot mux more than a single audio track with libav");
+        return Err(DashMpdError::Muxing(String::from("cannot mux more than one audio track with libav")));
+    }
+    let audio_str = &audio_tracks[0].path
         .to_str()
         .ok_or_else(|| DashMpdError::Io(
             io::Error::new(io::ErrorKind::Other, "obtaining audiopath name"),

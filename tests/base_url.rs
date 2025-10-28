@@ -1,17 +1,17 @@
-// Testing support for Bearer HTTP authorization.
+// Testing support for with_base_url() on DashDownloader
 //
 //
 // To run tests while enabling printing to stdout/stderr
 //
-//    RUST_LOG=info cargo test --test bearer_auth -- --show-output
+//    RUST_LOG=info cargo test --test base_url -- --show-output
 //
 // What happens in this test:
 //
-//   - Start an axum HTTP server that serves the manifest and our media segments. The server is
-//   configured to require HTTP Bearer authorization.
+//   - Start an axum HTTP server that serves the manifest and our media segments.
 //
-//   - Fetch the associated media content using DashDownloader, and check that each of the remote
-//   elements is retrieved.
+//   - Fetch the associated media content using DashDownloader with a base_url different from that
+//   present in the manifest, and check that the externally specified Base URL overrides that in the
+//   manifest.
 
 
 pub mod common;
@@ -25,36 +25,49 @@ use axum::extract::State;
 use axum::response::{Response, IntoResponse};
 use axum::http::header;
 use axum::body::Body;
-use axum_auth::AuthBearer;
-use http::StatusCode;
-use dash_mpd::{MPD, Period, AdaptationSet, Representation, SegmentTemplate};
+use dash_mpd::{MPD, Period, AdaptationSet, Representation, SegmentList, SegmentURL, BaseURL};
 use dash_mpd::fetch::DashDownloader;
 use anyhow::{Context, Result};
-use tracing::info;
 use common::{generate_minimal_mp4, setup_logging};
 
 
 #[derive(Debug, Default)]
 struct AppState {
-    counter: AtomicUsize,
+    original_counter: AtomicUsize,
+    updated_counter: AtomicUsize,
 }
 
 impl AppState {
     fn new() -> AppState {
-        AppState { counter: AtomicUsize::new(0) }
+        AppState {
+            original_counter: AtomicUsize::new(0),
+            updated_counter: AtomicUsize::new(0),
+        }
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_bearer_auth() -> Result<()> {
+async fn test_base_url() -> Result<()> {
     // State shared between the request handlers. We are simply maintaining a counter of the number
-    // of requests for media segments made.
+    // of requests for the original segment path and for the updated segment path.
     let shared_state = Arc::new(AppState::new());
 
-    async fn send_mpd(AuthBearer(token): AuthBearer) -> impl IntoResponse {
-        info!("mpd request: auth {token:?}");
-        let segment_template = SegmentTemplate {
-            initialization: Some("/media/f1.mp4".to_string()),
+    async fn send_mpd() -> impl IntoResponse {
+        let segment1 = SegmentURL {
+            media: Some(String::from("segment1.m4v")),
+            ..Default::default()
+        };
+        let segment2 = SegmentURL {
+            media: Some(String::from("segment2.m4v")),
+            ..Default::default()
+        };
+        let segment3 = SegmentURL {
+            media: Some(String::from("segment3.m4v")),
+            ..Default::default()
+        };
+        let segment_list = SegmentList {
+            timescale: Some(1000),
+            segment_urls: vec!(segment1, segment2, segment3),
             ..Default::default()
         };
         let rep = Representation {
@@ -64,7 +77,7 @@ async fn test_bearer_auth() -> Result<()> {
             width: Some(1920),
             height: Some(800),
             bandwidth: Some(1980081),
-            SegmentTemplate: Some(segment_template),
+            SegmentList: Some(segment_list),
             ..Default::default()
         };
         let adapt = AdaptationSet {
@@ -79,9 +92,14 @@ async fn test_bearer_auth() -> Result<()> {
             adaptations: vec!(adapt.clone()),
             ..Default::default()
         };
+        let original_base = BaseURL {
+            base: String::from("/original/"),
+            ..Default::default()
+        };
         let mpd = MPD {
             xmlns: Some("urn:mpeg:dash:schema:mpd:2011".to_string()),
             mpdtype: Some("static".to_string()),
+            base_url: vec!(original_base),
             periods: vec!(period),
             ..Default::default()
         };
@@ -89,13 +107,8 @@ async fn test_bearer_auth() -> Result<()> {
         ([(header::CONTENT_TYPE, "application/dash+xml")], xml)
     }
 
-    // Create a minimal sufficiently-valid MP4 file.
-    async fn send_mp4(
-        AuthBearer(token): AuthBearer,
-        State(state): State<Arc<AppState>>) -> Response
-    {
-        info!("segment request: auth {token:?}");
-        state.counter.fetch_add(1, Ordering::SeqCst);
+    async fn send_mp4_original(State(state): State<Arc<AppState>>) -> Response {
+        state.original_counter.fetch_add(1, Ordering::SeqCst);
         let data = generate_minimal_mp4();
         Response::builder()
             .status(axum::http::StatusCode::OK)
@@ -104,15 +117,28 @@ async fn test_bearer_auth() -> Result<()> {
             .unwrap()
     }
 
-    // Status requests don't require authentication.
+    async fn send_mp4_updated(State(state): State<Arc<AppState>>) -> Response {
+        state.updated_counter.fetch_add(1, Ordering::SeqCst);
+        let data = generate_minimal_mp4();
+        Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(header::CONTENT_TYPE, "video/mp4")
+            .body(Body::from(data))
+            .unwrap()
+    }
+
     async fn send_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-        ([(header::CONTENT_TYPE, "text/plain")], format!("{}", state.counter.load(Ordering::Relaxed)))
+        ([(header::CONTENT_TYPE, "text/plain")],
+         format!("{} {}",
+                 state.original_counter.load(Ordering::Relaxed),
+                 state.updated_counter.load(Ordering::Relaxed)))
     }
 
     setup_logging();
     let app = Router::new()
         .route("/mpd", get(send_mpd))
-        .route("/media/{seg}", get(send_mp4))
+        .route("/original/{seg}", get(send_mp4_original))
+        .route("/updated/{seg}", get(send_mp4_updated))
         .route("/status", get(send_status))
         .with_state(shared_state);
     let server_handle = hyper_serve::Handle::new();
@@ -120,12 +146,13 @@ async fn test_bearer_auth() -> Result<()> {
     let backend = async move {
         hyper_serve::bind("127.0.0.1:6666".parse().unwrap())
             .handle(backend_handle)
-            .serve(app.into_make_service()).await
+            .serve(app.into_make_service())
+            .await
             .unwrap()
     };
     tokio::spawn(backend);
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    // Check that the initial value of our request counter is zero.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // Check that the initial value of our request counters is zero.
     let client = reqwest::Client::builder()
         .timeout(Duration::new(10, 0))
         .build()
@@ -135,24 +162,11 @@ async fn test_bearer_auth() -> Result<()> {
         .error_for_status()?
         .text().await
         .context("fetching status")?;
-    assert!(txt.eq("0"), "Expecting 0 segment requests, got {txt}");
+    assert!(txt.eq("0 0"), "Expecting 0 original and 0 updated segment requests, got {txt}");
 
-    // Check that the manifest and media segments both require authentication
-    let mpd_fail = client.get("http://localhost:6666/mpd")
-        .send().await
-        .expect("unauthenticated manifest request");
-    assert_eq!(mpd_fail.status(), StatusCode::BAD_REQUEST);
-    let segment_fail = client.get("http://localhost:6666/media/foo.mp4")
-        .send().await
-        .expect("unauthenticated segment request");
-    assert_eq!(segment_fail.status(), StatusCode::BAD_REQUEST);
-
-    // Now download the media content from the MPD and check that the expected number of segments
-    // were requested. We expect 2 segment requests because our verbosity level of 2 means that the
-    // init segment will be retrieved twice, one of those times to print the PSSH if it is present.
-    let outpath = env::temp_dir().join("bearer_auth.mp4");
+    let outpath = env::temp_dir().join("base_url.mp4");
     DashDownloader::new("http://localhost:6666/mpd")
-        .with_auth_bearer(String::from("magic"))
+        .with_base_url(String::from("http://localhost:6666/updated/"))
         .verbosity(2)
         .download_to(outpath.clone()).await
         .unwrap();
@@ -162,7 +176,7 @@ async fn test_bearer_auth() -> Result<()> {
         .error_for_status()?
         .text().await
         .context("fetching status")?;
-    assert!(txt.eq("2"), "Expecting 2 segment requests, got {txt}");
+    assert!(txt.eq("0 3"), "Expecting 0 original and 3 updated segment requests, got {txt}");
     server_handle.shutdown();
 
     Ok(())
